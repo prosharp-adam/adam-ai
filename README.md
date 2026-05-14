@@ -244,7 +244,7 @@ Once connected, your AI agent has access to **12 specialized tools** for queryin
 
 ## 🤖 Agent Profiles — Teach Your AI to Use Adam Effectively
 
-Adam ships with **three pre-built agent profiles** (in the `docs/agents/` folder) that you can add to your AI tool's system prompt or custom instructions. These profiles teach your AI assistant the optimal strategy for querying Adam's tools — dramatically improving the quality and depth of results.
+Adam ships with **three pre-built agent profiles** (in the `agents/` folder) that you can add to your AI tool's system prompt or custom instructions. These profiles teach your AI assistant the optimal strategy for querying Adam's tools — dramatically improving the quality and depth of results.
 
 ### Why Use Agent Profiles?
 
@@ -280,7 +280,7 @@ Copy the content of the agent profile into your AI tool's custom instructions:
 <details>
 <summary><b>VS Code / GitHub Copilot</b></summary>
 
-Add the agent profile content to your `.github/copilot-instructions.md` file in your repository, or to your VS Code user-level instructions.
+Add the agent profile content to your `.github/agents` folder in your repository, or to your VS Code user-level instructions.
 
 </details>
 
