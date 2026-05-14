@@ -1,0 +1,504 @@
+# Adam - Production Deployment Template
+# Usage: docker compose up -d
+# Config: Copy .env.example to .env and set secrets
+
+name: adam
+
+services:
+  # ----- Infrastructure -----
+  neo4j:
+    image: neo4j:5-community
+    container_name: adam-neo4j
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+      - NEO4J_PLUGINS=["apoc"]
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - adam-network
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: adam-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333' >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - adam-network
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: adam-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - adam-network
+
+  docling:
+    image: ghcr.io/docling-project/docling-serve:latest
+    container_name: adam-docling
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:5001/health', timeout=3)" || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    restart: unless-stopped
+    networks:
+      - adam-network
+
+  # ----- Monitoring -----
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: adam-prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-otlp-receiver
+      - --web.enable-lifecycle
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    labels:
+      logging: adam
+    networks:
+      - adam-network
+
+  loki:
+    image: grafana/loki:3.2.0
+    container_name: adam-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      logging: adam
+    networks:
+      - adam-network
+
+  promtail:
+    image: grafana/promtail:3.2.0
+    container_name: adam-promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - adam-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: adam-grafana
+    ports:
+      - "3005:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=${GF_ANONYMOUS}
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_DEFAULT_THEME=dark
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - GF_INSTALL_PLUGINS=kniepdennis-neo4j-datasource
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/api/health >/dev/null 2>&1 || wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      logging: adam
+    networks:
+      - adam-network
+
+  # ----- Application: API -----
+  # The API is a thin HTTP front-end over Neo4j/Qdrant/Embedding.
+  api:
+    image: adamai.azurecr.io/adam-api:latest
+    container_name: adam-api
+    ports:
+      - "8080:8080"
+    labels:
+      logging: adam
+    healthcheck:
+      disable: true
+    environment:
+      # Telemetry: push OpenTelemetry metrics to Prometheus via OTLP.
+      - OpenTelemetry__Prometheus__OtlpEndpoint=http://prometheus:9090/api/v1/otlp/v1/metrics
+      - OTEL_SERVICE_NAME=adam-api
+      # Neo4j
+      - Neo4j__Local__Uri=bolt://neo4j:7687
+      - Neo4j__Local__Username=neo4j
+      - Neo4j__Local__Password=${NEO4J_PASSWORD}
+      - Neo4j__Local__Database=${NEO4J_DATABASE}
+
+      # Qdrant
+      - Qdrant__Local__GrpcEndpoint=http://qdrant:6334
+      - Qdrant__VectorDimensions=${QDRANT_VECTOR_DIMENSIONS}
+      - Qdrant__HnswM=${QDRANT_HNSW_M}
+      - Qdrant__HnswEfConstruct=${QDRANT_EF_CONSTRUCT}
+      - Qdrant__EnableQuantization=${ENABLE_QUANTIZATION}
+      - Qdrant__UpsertBatchSize=${UPSERT_BATCH_SIZE}
+
+      # Embedding
+      - Embedding__Provider=${EMBEDDING_PROVIDER}
+      - Embedding__ModelName=${EMBEDDING_MODEL}
+      - Embedding__Endpoint=http://ollama:11434
+      - Embedding__Dimensions=${EMBEDDING_DIMENSIONS}
+      - Embedding__BatchSize=${EMBEDDING_BATCHSIZE}
+
+      # Jira
+      - Jira__Enabled=${JIRA_ENABLED}
+      - Jira__BaseUrl=${JIRA_BASE_URL}
+      - Jira__Email=${JIRA_EMAIL}
+      - Jira__ApiToken=${JIRA_API_TOKEN}
+      - Jira__ProjectKeys=${JIRA_PROJECT_KEYS}
+      - Jira__PageSize=${JIRA_PAGE_SIZE}
+
+      # Confluence
+      - Confluence__Enabled=${CONFLUENCE_ENABLED}
+      - Confluence__BaseUrl=${CONFLUENCE_BASE_URL}
+      - Confluence__Email=${CONFLUENCE_EMAIL}
+      - Confluence__ApiToken=${CONFLUENCE_API_TOKEN}
+      - Confluence__SpaceKeys=${CONFLUENCE_SPACE_KEYS}
+
+      # ClickUp Tickets
+      - ClickUp__Enabled=${CLICKUP_ENABLED}
+      - ClickUp__BaseUrl=${CLICKUP_BASEURL:-https://api.clickup.com/api/v2}
+      - ClickUp__ApiToken=${CLICKUP_API_TOKEN}
+      - ClickUp__TeamIds=${CLICKUP_TEAM_IDS}
+      - ClickUp__PageSize=${CLICKUP_PAGE_SIZE}
+
+      # ClickUp Docs
+      - ClickUpDocs__Enabled=${CLICKUP_ENABLED}
+      - ClickUpDocs__BaseUrl=${CLICKUP_DOCS_BASEURL:-https://api.clickup.com/api/v3}
+      - ClickUpDocs__ApiToken=${CLICKUP_API_TOKEN}
+      - ClickUpDocs__WorkspaceIds=${CLICKUP_TEAM_IDS}
+      - ClickUpDocs__PageSize=${CLICKUP_DOCS_PAGE_SIZE}
+
+      # Azure DevOps Work Items
+      - AzureDevOps__WorkItem__Enabled=${ADO_WORKITEM_ENABLED}
+      - AzureDevOps__WorkItem__BaseUrl=${ADO_BASEURL:-https://dev.azure.com}
+      - AzureDevOps__WorkItem__PersonalAccessToken=${ADO_PAT}
+      - AzureDevOps__WorkItem__Organization=${ADO_ORG}
+      - AzureDevOps__WorkItem__Projects=${ADO_PROJECTS}
+      - AzureDevOps__WorkItem__WorkItemTypes=${ADO_WORKITEM_TYPES:-Bug,User Story,Task,Feature,Epic}
+      - AzureDevOps__WorkItem__PageSize=${ADO_WORKITEM_PAGE_SIZE}
+
+      # Azure DevOps Wiki
+      - AzureDevOps__Wiki__Enabled=${ADO_WIKI_ENABLED}
+      - AzureDevOps__Wiki__BaseUrl=${ADO_BASEURL:-https://dev.azure.com}
+      - AzureDevOps__Wiki__PersonalAccessToken=${ADO_PAT}
+      - AzureDevOps__Wiki__Organization=${ADO_ORG}
+      - AzureDevOps__Wiki__Projects=${ADO_PROJECTS}
+      - AzureDevOps__Wiki__PageSize=${ADO_WIKI_PAGE_SIZE}
+
+      # Azure DevOps Pull Requests
+      - AzureDevOps__Pr__Enabled=${ADO_PR_ENABLED}
+      - AzureDevOps__Pr__BaseUrl=${ADO_BASEURL:-https://dev.azure.com}
+      - AzureDevOps__Pr__PersonalAccessToken=${ADO_PAT}
+      - AzureDevOps__Pr__Organization=${ADO_ORG}
+      - AzureDevOps__Pr__Repos=${ADO_PR_REPOS}
+      - AzureDevOps__Pr__PageSize=${ADO_PR_PAGE_SIZE}
+
+      # Google Drive
+      - GoogleDrive__Enabled=${GOOGLE_DRIVE_ENABLED}
+      - GoogleDrive__BaseUrl=${GOOGLE_DRIVE_BASEURL:-https://www.googleapis.com/drive/v3}
+      - GoogleDrive__ServiceAccountKeyPath=${GOOGLE_DRIVE_SERVICEACCOUNT_KEY_PATH}
+      - GoogleDrive__DriveId=${GOOGLE_DRIVE_DRIVE_ID}
+      - GoogleDrive__FolderIds=${GOOGLE_DRIVE_FOLDER_IDS}
+      - GoogleDrive__SupportedMimeTypes=${GOOGLE_DRIVE_SUPPORTED_MIME_TYPES:-application/vnd.google-apps.document,application/vnd.google-apps.spreadsheet,application/vnd.google-apps.presentation,text/plain,text/markdown,text/html,application/pdf}
+      - GoogleDrive__PageSize=${GOOGLE_DRIVE_PAGE_SIZE}
+
+      # GitHub repo
+      - GitHub__Enabled=${GITHUB_ENABLED}
+      - GitHub__BaseUrl=${GITHUB_BASEURL:-https://api.github.com}
+      - GitHub__Token=${GITHUB_TOKEN}
+      - GitHub__Repos=${GITHUB_REPOS}
+
+      # Code Indexing
+      - CodeIndex__Enabled=${CODE_INDEX_ENABLED}
+      - CodeIndex__RepoPath=/mnt/code
+      - CodeIndex__Languages=${CODE_INDEX_LANGUAGES:-csharp,typescript}
+      - CodeIndex__ExcludePatterns=${CODE_INDEX_EXCLUDE_PATTERNS:-**/bin/**,**/node_modules/**,**/obj/**,**/.git/**,**/Lib/**}
+
+      # Docling
+      - Docling__Enabled=${DOCLING_ENABLED}
+      - Docling__Endpoint=http://docling:5001
+      - Docling__TimeoutSeconds=${DOCLING_TIMEOUT}
+      - Docling__MaxDocumentSizeBytes=${DOCLING_MAX_DOCUMENT_SIZE_IN_BYTES}
+
+      # License
+      - License__LicenseKey=${LICENSE_KEY}
+      - License__LocalStoragePath=/var/lib/adam/data
+    depends_on:
+      neo4j:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_started
+    restart: no
+    volumes:
+      - ${HOST_CODE_PATH}:/mnt/code:ro
+      - adam-license-data:/var/lib/adam/data
+    networks:
+      - adam-network
+
+  # ----- Application: Worker -----
+  # The worker owns all scheduled sync jobs
+  worker:
+    image: adamai.azurecr.io/adam-worker:latest
+    container_name: adam-worker
+    labels:
+      logging: adam
+    environment:
+      # Telemetry: push OpenTelemetry metrics to Prometheus via OTLP.
+      - OpenTelemetry__Prometheus__OtlpEndpoint=http://prometheus:9090/api/v1/otlp/v1/metrics
+      - OTEL_SERVICE_NAME=adam-worker
+      # Neo4j
+      - Neo4j__Local__Uri=bolt://neo4j:7687
+      - Neo4j__Local__Username=neo4j
+      - Neo4j__Local__Password=${NEO4J_PASSWORD}
+      - Neo4j__Local__Database=${NEO4J_DATABASE}
+
+      # Qdrant
+      - Qdrant__Local__GrpcEndpoint=http://qdrant:6334
+      - Qdrant__VectorDimensions=${QDRANT_VECTOR_DIMENSIONS}
+      - Qdrant__HnswM=${QDRANT_HNSW_M}
+      - Qdrant__HnswEfConstruct=${QDRANT_EF_CONSTRUCT}
+      - Qdrant__EnableQuantization=${ENABLE_QUANTIZATION}
+      - Qdrant__UpsertBatchSize=${UPSERT_BATCH_SIZE}
+
+      # Embedding
+      - Embedding__Provider=${EMBEDDING_PROVIDER}
+      - Embedding__ModelName=${EMBEDDING_MODEL}
+      - Embedding__Endpoint=http://ollama:11434
+      - Embedding__Dimensions=${EMBEDDING_DIMENSIONS}
+      - Embedding__BatchSize=${EMBEDDING_BATCHSIZE}
+
+      # Jira
+      - Jira__Enabled=${JIRA_ENABLED}
+      - Jira__BaseUrl=${JIRA_BASE_URL}
+      - Jira__Email=${JIRA_EMAIL}
+      - Jira__ApiToken=${JIRA_API_TOKEN}
+      - Jira__ProjectKeys=${JIRA_PROJECT_KEYS}
+      - Jira__PageSize=${JIRA_PAGE_SIZE}
+
+      # Confluence
+      - Confluence__Enabled=${CONFLUENCE_ENABLED}
+      - Confluence__BaseUrl=${CONFLUENCE_BASE_URL}
+      - Confluence__Email=${CONFLUENCE_EMAIL}
+      - Confluence__ApiToken=${CONFLUENCE_API_TOKEN}
+      - Confluence__SpaceKeys=${CONFLUENCE_SPACE_KEYS}
+
+      # ClickUp Tickets
+      - ClickUp__Enabled=${CLICKUP_ENABLED}
+      - ClickUp__BaseUrl=${CLICKUP_BASEURL:-https://api.clickup.com/api/v2}
+      - ClickUp__ApiToken=${CLICKUP_API_TOKEN}
+      - ClickUp__TeamIds=${CLICKUP_TEAM_IDS}
+      - ClickUp__PageSize=${CLICKUP_PAGE_SIZE}
+
+      # ClickUp Docs
+      - ClickUpDocs__Enabled=${CLICKUP_DOCS_ENABLED}
+      - ClickUpDocs__BaseUrl=${CLICKUP_DOCS_BASEURL:-https://api.clickup.com/api/v3}
+      - ClickUpDocs__ApiToken=${CLICKUP_API_TOKEN}
+      - ClickUpDocs__WorkspaceIds=${CLICKUP_TEAM_IDS}
+      - ClickUpDocs__PageSize=${CLICKUP_DOCS_PAGE_SIZE}
+
+      # Azure DevOps Work Items
+      - AzureDevOps__WorkItem__Enabled=${ADO_WORKITEM_ENABLED}
+      - AzureDevOps__WorkItem__BaseUrl=${ADO_BASEURL:-https://dev.azure.com}
+      - AzureDevOps__WorkItem__PersonalAccessToken=${ADO_PAT}
+      - AzureDevOps__WorkItem__Organization=${ADO_ORG}
+      - AzureDevOps__WorkItem__Projects=${ADO_PROJECTS}
+      - AzureDevOps__WorkItem__WorkItemTypes=${ADO_WORKITEM_TYPES:-Bug,User Story,Task,Feature,Epic}
+      - AzureDevOps__WorkItem__PageSize=${ADO_WORKITEM_PAGE_SIZE}
+
+      # Azure DevOps Wiki
+      - AzureDevOps__Wiki__Enabled=${ADO_WIKI_ENABLED}
+      - AzureDevOps__Wiki__BaseUrl=${ADO_BASEURL:-https://dev.azure.com}
+      - AzureDevOps__Wiki__PersonalAccessToken=${ADO_PAT}
+      - AzureDevOps__Wiki__Organization=${ADO_ORG}
+      - AzureDevOps__Wiki__Projects=${ADO_PROJECTS}
+      - AzureDevOps__Wiki__PageSize=${ADO_WIKI_PAGE_SIZE}
+
+      # Azure DevOps Pull Prequests
+      - AzureDevOps__Pr__Enabled=${ADO_PR_ENABLED}
+      - AzureDevOps__Pr__BaseUrl=${ADO_BASEURL:-https://dev.azure.com}
+      - AzureDevOps__Pr__PersonalAccessToken=${ADO_PAT}
+      - AzureDevOps__Pr__Organization=${ADO_ORG}
+      - AzureDevOps__Pr__Repos=${ADO_PR_REPOS}
+      - AzureDevOps__Pr__PageSize=${ADO_PR_PAGE_SIZE}
+
+      # Google Drive
+      - GoogleDrive__Enabled=${GOOGLE_DRIVE_ENABLED}
+      - GoogleDrive__BaseUrl=${GOOGLE_DRIVE_BASEURL:-https://www.googleapis.com/drive/v3}
+      - GoogleDrive__ServiceAccountKeyPath=${GOOGLE_DRIVE_SERVICEACCOUNT_KEY_PATH}
+      - GoogleDrive__DriveId=${GOOGLE_DRIVE_DRIVE_ID}
+      - GoogleDrive__FolderIds=${GOOGLE_DRIVE_FOLDER_IDS}
+      - GoogleDrive__SupportedMimeTypes=${GOOGLE_DRIVE_SUPPORTED_MIME_TYPES:-application/vnd.google-apps.document,application/vnd.google-apps.spreadsheet,application/vnd.google-apps.presentation,text/plain,text/markdown,text/html,application/pdf}
+      - GoogleDrive__PageSize=${GOOGLE_DRIVE_PAGE_SIZE}
+
+      # GitHub repo
+      - GitHub__Enabled=${GITHUB_ENABLED}
+      - GitHub__BaseUrl=${GITHUB_BASEURL:-https://api.github.com}
+      - GitHub__Token=${GITHUB_TOKEN}
+      - GitHub__Repos=${GITHUB_REPOS}
+
+      # Code Indexing
+      - CodeIndex__Enabled=${CODE_INDEX_ENABLED}
+      - CodeIndex__RepoPath=/mnt/code
+      - CodeIndex__Languages=${CODE_INDEX_LANGUAGES:-csharp,typescript}
+      - CodeIndex__ExcludePatterns=${CODE_INDEX_EXCLUDE_PATTERNS:-**/bin/**,**/node_modules/**,**/obj/**,**/.git/**,**/Lib/**}
+
+      # Docling
+      - Docling__Enabled=${DOCLING_ENABLED}
+      - Docling__Endpoint=http://docling:5001
+      - Docling__TimeoutSeconds=${DOCLING_TIMEOUT}
+      - Docling__MaxDocumentSizeBytes=${DOCLING_MAX_DOCUMENT_SIZE_IN_BYTES}
+
+      # License
+      - License__LicenseKey=${LICENSE_KEY}
+      - License__LocalStoragePath=/var/lib/adam/data
+    depends_on:
+      neo4j:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_started
+    restart: no
+    volumes:
+      - ${HOST_CODE_PATH}:/mnt/code:ro
+      - adam-license-data:/var/lib/adam/data
+    networks:
+      - adam-network
+
+  # ----- Application: MCP Server -----
+  # MCP server is a thin wrapper over the API. 
+  mcpserver:
+    image: adamai.azurecr.io/adam-mcpserver:latest
+    container_name: adam-mcpserver
+    ports:
+      - "8090:8090"
+    labels:
+      logging: adam
+    healthcheck:
+      disable: true
+    environment:
+      # Telemetry: push OpenTelemetry metrics to Prometheus via OTLP.
+      - OpenTelemetry__Prometheus__OtlpEndpoint=http://prometheus:9090/api/v1/otlp/v1/metrics
+      - OTEL_SERVICE_NAME=adam-mcpserver
+      - MCP_Mcp__Transport=http
+      - Mcp__ClientSecret=${MCP_CLIENT_SECRET}
+
+      # Neo4j
+      - Neo4j__Local__Uri=bolt://neo4j:7687
+      - Neo4j__Local__Username=neo4j
+      - Neo4j__Local__Password=${NEO4J_PASSWORD}
+      - Neo4j__Local__Database=${NEO4J_DATABASE}
+
+      # Qdrant
+      - Qdrant__Local__GrpcEndpoint=http://qdrant:6334
+      - Qdrant__VectorDimensions=${QDRANT_VECTOR_DIMENSIONS}
+      - Qdrant__HnswM=${QDRANT_HNSW_M}
+      - Qdrant__HnswEfConstruct=${QDRANT_EF_CONSTRUCT}
+      - Qdrant__EnableQuantization=${ENABLE_QUANTIZATION}
+      - Qdrant__UpsertBatchSize=${UPSERT_BATCH_SIZE}
+
+      # Embedding
+      - Embedding__Provider=${EMBEDDING_PROVIDER}
+      - Embedding__ModelName=${EMBEDDING_MODEL}
+      - Embedding__Endpoint=http://ollama:11434
+      - Embedding__Dimensions=${EMBEDDING_DIMENSIONS}
+      - Embedding__BatchSize=${EMBEDDING_BATCHSIZE}
+
+      # License
+      - License__LicenseKey=${LICENSE_KEY}
+      - License__LocalStoragePath=/var/lib/adam/data
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: no
+    volumes:
+      - adam-license-data:/var/lib/adam/data
+    networks:
+      - adam-network
+
+networks:
+  adam-network:
+    driver: bridge
+
+volumes:
+  neo4j-data:
+  qdrant-data:
+  ollama-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  adam-license-data:
