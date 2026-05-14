@@ -167,11 +167,11 @@ Add the following MCP server configuration to your AI assistant:
 
 Once syncing completes, ask your AI assistant things like:
 
-- *"What feature introduced the republishing needed data quality status?"*
-- *"Which tickets mention the batch export timeout when filtering by access control?"*
-- *"When was the item locking mechanism changed from pessimistic to optimistic, and which PR implemented it?"*
-- *"Find the ticket about the calendar widget breaking when switching between monthly and weekly views"*
-- *"What code handles the data recipient group maintenance lock, and why does it never get released?"*
+- _"What feature introduced the republishing needed data quality status?"_
+- _"Which tickets mention the batch export timeout when filtering by access control?"_
+- _"When was the item locking mechanism changed from pessimistic to optimistic, and which PR implemented it?"_
+- _"Find the ticket about the calendar widget breaking when switching between monthly and weekly views"_
+- _"What code handles the data recipient group maintenance lock, and why does it never get released?"_
 
 ---
 
@@ -239,6 +239,66 @@ Once connected, your AI agent has access to **12 specialized tools** for queryin
 | ------------ | -------------------------------------------------------------------------------------------------- |
 | `syncTicket` | Sync a single ticket on-demand. Use when `getTicketContext` returns `TICKET_NOT_FOUND`.            |
 | `syncAll`    | Start a full synchronization of all configured data sources with real-time progress notifications. |
+
+---
+
+## 🤖 Agent Profiles — Teach Your AI to Use Adam Effectively
+
+Adam ships with **three pre-built agent profiles** (in the `docs/agents/` folder) that you can add to your AI tool's system prompt or custom instructions. These profiles teach your AI assistant the optimal strategy for querying Adam's tools — dramatically improving the quality and depth of results.
+
+### Why Use Agent Profiles?
+
+Without guidance, an AI assistant will make basic, surface-level queries. With an agent profile, it learns to:
+
+- **Orchestrate multi-phase searches** — start broad, then drill deeper based on findings
+- **Cross-reference across data sources** — connect tickets to code to documentation
+- **Use the right tool for the right job** — semantic search for concepts, text search for exact strings, graph queries for relationships
+- **Verify findings in code** — tickets and docs give direction, but code is the source of truth
+
+### Available Profiles
+
+| Profile                 | File                                 | Best For                                                                                                                  |
+| ----------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| **Ticket-First Search** | `agents/ticket-first-search.md` | Support investigations, bug analysis, finding past solutions, understanding how issues were resolved                      |
+| **Code-First Search**   | `agents/code-first-search.md`   | Understanding code behavior, tracing dependencies, finding where errors originate, then enriching with ticket/doc context |
+| **Code-Only Search**    | `agents/code-only-search.md`    | Pure codebase navigation — classes, methods, callers, callees, inheritance chains. No ticket or doc context               |
+
+### How They Work
+
+Each profile uses a **multi-phase orchestration model** where the AI agent:
+
+1. **Phase 1** — Searches the primary data source (tickets or code, depending on the profile)
+2. **Analyzes** — Extracts key terms, error codes, class names, and component names from results
+3. **Phase 2** — Cross-references findings in the secondary data source (code verification for ticket-first, organizational context for code-first)
+4. **Phase 3** _(optional)_ — Deep dives into documentation, graph queries, or transitive dependency chains
+5. **Synthesizes** — Combines all findings into a structured, actionable report
+
+### How to Use
+
+Copy the content of the agent profile into your AI tool's custom instructions:
+
+<details>
+<summary><b>VS Code / GitHub Copilot</b></summary>
+
+Add the agent profile content to your `.github/copilot-instructions.md` file in your repository, or to your VS Code user-level instructions.
+
+</details>
+
+<details>
+<summary><b>Claude Desktop / Claude Projects</b></summary>
+
+Paste the agent profile content into the **Project Instructions** or **System Prompt** field.
+
+</details>
+
+<details>
+<summary><b>Cursor / Windsurf</b></summary>
+
+Add the agent profile content to your `.cursor/rules` or equivalent custom instructions file.
+
+</details>
+
+> **Tip:** Start with **Ticket-First Search** if your team primarily investigates support issues, or **Code-First Search** if your team primarily navigates and understands the codebase.
 
 ---
 
