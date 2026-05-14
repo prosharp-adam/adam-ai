@@ -440,7 +440,7 @@ services:
   # ----- Application: MCP Server -----
   # MCP server is a thin wrapper over the API. 
   mcpserver:
-    image: prosharp/adam-mcp:latest
+    image: prosharp/adam-mcpserver:latest
     container_name: adam-mcpserver
     ports:
       - "8090:8090"
