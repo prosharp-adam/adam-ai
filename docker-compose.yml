@@ -176,7 +176,7 @@ services:
   # ----- Application: API -----
   # The API is a thin HTTP front-end over Neo4j/Qdrant/Embedding.
   api:
-    image: adamai.azurecr.io/adam-api:latest
+    image: prosharp/adam-api:latest
     container_name: adam-api
     ports:
       - "8080:8080"
@@ -310,7 +310,7 @@ services:
   # ----- Application: Worker -----
   # The worker owns all scheduled sync jobs
   worker:
-    image: adamai.azurecr.io/adam-worker:latest
+    image: prosharp/adam-worker:latest
     container_name: adam-worker
     labels:
       logging: adam
@@ -440,7 +440,7 @@ services:
   # ----- Application: MCP Server -----
   # MCP server is a thin wrapper over the API. 
   mcpserver:
-    image: adamai.azurecr.io/adam-mcpserver:latest
+    image: prosharp/adam-mcp:latest
     container_name: adam-mcpserver
     ports:
       - "8090:8090"

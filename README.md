@@ -73,16 +73,17 @@ cp .env.example .env
 
 Open `.env` in your editor. You only need to configure the services you want to enable — everything else can stay commented out or at defaults.
 
-| Section       | Required?             | Description                                    |
-| ------------- | --------------------- | ---------------------------------------------- |
-| `LICENSE_KEY` | **Yes**               | Your Adam license key                          |
-| `Jira`        | If using Jira         | Jira Cloud URL, email, API token, project keys |
-| `ClickUp`     | If using ClickUp      | API token, workspace & space IDs               |
-| `AzureDevOps` | If using Azure DevOps | Organization URL, PAT, project names           |
-| `Confluence`  | If using Confluence   | Confluence URL, credentials, space keys        |
-| `GitHub`      | If using GitHub       | Personal access token, org/repos               |
-| `GoogleDrive` | If using Google Drive | Service account or OAuth credentials           |
-| `CodeIndex`   | If indexing code      | Git repository URLs, languages to index        |
+| Section          | Required?             | Description                                    |
+| ---------------- | --------------------- | ---------------------------------------------- |
+| `LICENSE_KEY`    | **Yes**               | Your Adam license key                          |
+| `HOST_CODE_PATH` | **Yes**               | Your folder for your repository                |
+| `Jira`           | If using Jira         | Jira Cloud URL, email, API token, project keys |
+| `ClickUp`        | If using ClickUp      | API token, workspace & space IDs               |
+| `AzureDevOps`    | If using Azure DevOps | Organization URL, PAT, project names           |
+| `Confluence`     | If using Confluence   | Confluence URL, credentials, space keys        |
+| `GitHub`         | If using GitHub       | Personal access token, org/repos               |
+| `GoogleDrive`    | If using Google Drive | Service account or OAuth credentials           |
+| `CodeIndex`      | If indexing code      | Git repository URLs, languages to index        |
 
 > **Tip:** Start with just one connector (e.g., Jira) to see results quickly. You can add more later.
 
@@ -126,7 +127,7 @@ Add the following MCP server configuration to your AI assistant:
 </details>
 
 <details>
-<summary><b>Claude Desktop</b> — <code>claude_desktop_config.json</code></summary>
+<summary><b>Claude Desktop / Claude Code</b> — <code>claude_desktop_config.json</code></summary>
 
 ```json
 {
@@ -161,7 +162,7 @@ Add the following MCP server configuration to your AI assistant:
 
 </details>
 
-> Replace `YOUR_CLIENT_SECRET` with the client secret from your `.env` file.
+> Replace `YOUR_CLIENT_SECRET` with the client secret value of `MCP_CLIENT_SECRET` from your `.env` file. It can be anything, but needs to be at least 16 chars.
 
 ### 5. Start asking questions
 
@@ -257,8 +258,8 @@ Without guidance, an AI assistant will make basic, surface-level queries. With a
 
 ### Available Profiles
 
-| Profile                 | File                                 | Best For                                                                                                                  |
-| ----------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Profile                 | File                            | Best For                                                                                                                  |
+| ----------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | **Ticket-First Search** | `agents/ticket-first-search.md` | Support investigations, bug analysis, finding past solutions, understanding how issues were resolved                      |
 | **Code-First Search**   | `agents/code-first-search.md`   | Understanding code behavior, tracing dependencies, finding where errors originate, then enriching with ticket/doc context |
 | **Code-Only Search**    | `agents/code-only-search.md`    | Pure codebase navigation — classes, methods, callers, callees, inheritance chains. No ticket or doc context               |
@@ -285,7 +286,7 @@ Add the agent profile content to your `.github/agents` folder in your repository
 </details>
 
 <details>
-<summary><b>Claude Desktop / Claude Projects</b></summary>
+<summary><b>Claude Desktop / Claude Code</b></summary>
 
 Paste the agent profile content into the **Project Instructions** or **System Prompt** field.
 
