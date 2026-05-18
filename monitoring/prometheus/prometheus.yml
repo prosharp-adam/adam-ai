@@ -1,0 +1,23 @@
+# Prometheus configuration for Adam.
+#
+# Adam services push metrics to Prometheus via OTLP — there are no scrape jobs
+# for the application itself (the OTLP receiver feature must be enabled on the
+# Prometheus command line, see docker-compose.yml `--web.enable-otlp-receiver`).
+#
+# Optional scrape targets can be added below for non-OTLP exporters.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: adam
+
+# Out-of-process / non-OTLP scrape targets (kept minimal).
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+
+# Recording / alerting rules can be added under monitoring/prometheus/rules/.
+rule_files: []
